@@ -1,0 +1,135 @@
+;======= MPPROFILE - MassProp Profile có lỗ + Move UCS to Centroid
+;======= Ketxu + Customize by Grok - Fixed OSNAP restore =================================
+
+(defun c:MPPROFILE (/ cSet cLst oldSnp oldEcho oldDelobj cCen cAre cmLst gCen 
+                     ssReg ssOthers ssRegCreate *model* elast outer inner finalSS numReg)
+(vl-load-com)
+(grtext -1 "MPPROFILE - Profile co lo + Auto MASSPROP + UCS to Centroid")
+(command "undo" "be")
+
+;============== Local Functions ================================
+(defun ST:SS-Filter (ss typeObj / ssRT)
+  (setq ssRT (ssadd))
+  (foreach en (ST:Ss->ListEnt ss)
+    (if (wcmatch (cdadr (entget en)) typeObj)
+      (setq ssRT (ssadd en ssRT))
+    )
+  )
+  ssRT
+)
+
+(defun ST:Ss->ListEnt (ss / n e l)
+  (setq n (sslength ss))
+  (while (setq e (ssname ss (setq n (1- n))))
+    (setq l (cons e l))
+  )
+)
+
+;================ Start Here =====================================
+(princ "\n<<< Chọn TẤT CẢ biên dạng (ngoài + trong) của profile >>> ")
+
+(if (setq cSet (ssget '((0 . "REGION,3DSOLID,*POLYLINE,SPLINE,CIRCLE,ELLIPSE"))))
+  (progn
+    ;; Lưu trạng thái ban đầu
+    (setq oldSnp   (getvar "OSMODE")
+          oldEcho  (getvar "CMDECHO")
+          oldDelobj (getvar "DELOBJ"))
+
+    (or (setq ssReg (ST:SS-Filter cSet "REGION,3DSOLID")) (setq ssReg (ssadd)))
+    (setq ssOthers (ST:SS-Filter cSet "*POLYLINE,SPLINE,CIRCLE,ELLIPSE"))
+    (setq ssRegCreate (ssadd))
+    (setq *model* (vla-get-modelspace (vla-get-activedocument (vlax-get-acad-object))))
+
+    (setq ssOthers (mapcar 'vlax-ename->vla-object (ST:Ss->ListEnt ssOthers)))
+
+    ; Convert tất cả closed entities thành Region
+    (foreach other ssOthers
+      (if (= :vlax-true (vla-get-Closed other))
+        (setq ssRegCreate (ssadd (vlax-vla-object->ename 
+                                  (car (vlax-invoke *model* 'addregion (list other)))) 
+                                 ssRegCreate))
+      )
+    )
+
+    (foreach en (ST:Ss->ListEnt ssRegCreate)
+      (setq ssReg (ssadd en ssReg))
+    )
+
+    ; Tắt tạm thời
+    (mapcar 'setvar (list "OSMODE" "CMDECHO" "DELOBJ") (list 0 0 0))
+
+    ; ==================== XỬ LÝ SUBTRACT NẾU CÓ LỖ ====================
+    (setq numReg (sslength ssReg))
+    (cond
+      ((>= numReg 2)   ; Có biên ngoài + biên trong
+       (princ "\n\n=== PHÁT HIỆN PROFILE CÓ LỖ ===")
+       (princ "\nChọn Region BIÊN NGOÀI (outer profile) : ")
+       (setq outer (ssget ":S" '((0 . "REGION"))))
+
+       (princ "\nChọn Region BIÊN TRONG (inner hole(s) - có thể chọn nhiều) : ")
+       (setq inner (ssget '((0 . "REGION"))))
+
+       (if (and outer inner)
+         (progn
+           (command "_.subtract" outer "" inner "")
+           (setq finalSS outer)
+           (princ "\n✅ Đã Subtract biên trong khỏi biên ngoài.")
+         )
+         (setq finalSS ssReg)
+       )
+      )
+      (T
+       (setq finalSS ssReg)
+      )
+    )
+
+    ; ==================== TÍNH CENTROID & DỜI UCS ====================
+    (setq cLst (mapcar 'vlax-ename->vla-object (ST:Ss->ListEnt finalSS)))
+
+    (if cLst
+      (progn
+        (setq cmLst nil)
+        (foreach ent cLst
+          (if (vlax-property-available-p ent 'Centroid)
+            (progn
+              (setq cCen (vlax-get ent 'Centroid)
+                    cAre (vlax-get ent 'Area))
+              (setq cmLst (cons (list cCen cAre) cmLst))
+            )
+          )
+        )
+
+        (if cmLst
+          (setq gCen (caar cmLst))
+          (setq gCen nil)
+        )
+
+        (if gCen
+          (progn
+            (command "_.UCS" "_Origin" gCen)
+            (princ (strcat "\n✅ UCS đã dời về trọng tâm: X=" (rtos (car gCen) 2 2)
+                           "   Y=" (rtos (cadr gCen) 2 2)))
+            (princ "\n✅ Trọng tâm giờ nằm tại tọa độ (0,0)")
+
+            ; Chạy MASSPROP
+            (princ "\n\nĐang chạy MASSPROP trên profile đã Subtract...\n")
+            (command "_.MASSPROP" finalSS "")
+            (princ "\n✅ MASSPROP hoàn tất! Centroid = 0,0 trong UCS hiện tại.\n")
+          )
+          (princ "\nKhông tìm thấy centroid.")
+        )
+      )
+    )
+
+    ; ==================== KHÔI PHỤC TRẠNG THÁI ====================
+    (mapcar 'setvar (list "OSMODE" "CMDECHO" "DELOBJ") 
+                    (list oldSnp oldEcho oldDelobj))
+
+  ); end progn
+); end if
+
+(command ".erase" ssRegCreate "")
+(command "undo" "en")
+(princ "\nHoàn thành lệnh MPPROFILE - OSNAP đã được khôi phục.")
+(princ)
+); end of c:MPPROFILE
