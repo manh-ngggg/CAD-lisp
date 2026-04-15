@@ -1,0 +1,150 @@
+;; ============================================================
+;; LISP: COPY LAYOUT + AUTO SHIFT VIEWPORT THEO SCALE + DIRECTION
+;; Command: CLAYPSV
+;; ============================================================
+
+(vl-load-com)
+
+(defun shift-viewport-scale ( dir / ss ent vp i vpObj sc dist panStr )
+
+  (setq ss (ssget "X"
+            (list
+              '(0 . "VIEWPORT")
+              (cons 410 (getvar "CTAB"))
+            )
+          )
+  )
+
+  (if (and ss (> (sslength ss) 0))
+    (progn
+      (setq vp nil
+            i  0)
+
+      (while (< i (sslength ss))
+        (setq ent (ssname ss i))
+        (if (> (cdr (assoc 69 (entget ent))) 1)
+          (setq vp ent)
+        )
+        (setq i (1+ i))
+      )
+
+      (if vp
+        (progn
+          (setq vpObj (vlax-ename->vla-object vp))
+
+          ;; scale chuẩn
+          (setq sc (/ 1.0 (vla-get-CustomScale vpObj)))
+
+          ;; khoảng pan
+          (setq dist (* 420 sc))
+
+          ;; 👉 XÁC ĐỊNH HƯỚNG
+          (cond
+            ((= dir "R") (setq panStr (strcat "-" (rtos dist 2 2) ",0"))); phải
+            ((= dir "L") (setq panStr (strcat (rtos dist 2 2) ",0")))    ; trái
+            ((= dir "U") (setq panStr (strcat "0,-" (rtos dist 2 2))))   ; lên
+            ((= dir "D") (setq panStr (strcat "0," (rtos dist 2 2))))    ; xuống
+            (T (setq panStr (strcat "-" (rtos dist 2 2) ",0"))) ; default phải
+          )
+
+          ;; unlock viewport
+          (vla-put-DisplayLocked vpObj :vlax-false)
+
+          ;; activate viewport
+          (command "_.PSPACE")
+          (command "_.MSPACE")
+
+          ;; pan
+          (command "_.-PAN" "0,0" panStr)
+
+          (command "_.PSPACE")
+
+          (prompt (strcat "\nScale=" (rtos sc 2 2)
+                          " | Dist=" (rtos dist 2 2)
+                          " | Dir=" dir))
+        )
+      )
+    )
+  )
+)
+
+(defun c:CLAYPSV ( / oldlay prefix startnum qty i newname padnum dir )
+
+  (setq oldlay (getvar 'CTAB))
+
+  ;; check model
+  (if (= oldlay "Model")
+    (progn
+      (alert "Bạn đang ở Model! Hãy chuyển sang Layout.")
+      (exit)
+    )
+  )
+
+  (princ (strcat "\nLayout gốc: " oldlay))
+
+  ;; input
+  (setq prefix (getstring t "\nNhập Prefix (VD: PE): "))
+  (if (= prefix "") (setq prefix "PE"))
+
+  (setq startnum (getint "\nNhập số bắt đầu (VD: 2): "))
+  (if (not startnum) (setq startnum 1))
+
+  (setq qty (getint "\nNhập số lượng layout: "))
+  (if (or (not qty) (<= qty 0))
+    (progn
+      (alert "Số lượng không hợp lệ!")
+      (exit)
+    )
+  )
+
+  ;; 👉 chọn hướng pan
+  (initget "R L U D")
+  (setq dir (getkword "\nChọn hướng pan [R=Phải / L=Trái / U=Lên / D=Xuống] <R>: "))
+  (if (null dir) (setq dir "R"))
+
+  (setq i 0)
+
+  (repeat qty
+
+    ;; format số
+    (setq padnum (if (< (+ startnum i) 10)
+                     (strcat "0" (itoa (+ startnum i)))
+                     (itoa (+ startnum i))
+                 )
+    )
+
+    (setq newname (strcat prefix padnum))
+
+    ;; tránh trùng
+    (while (tblobjname "LAYOUT" newname)
+      (setq i (1+ i))
+      (setq padnum (if (< (+ startnum i) 10)
+                       (strcat "0" (itoa (+ startnum i)))
+                       (itoa (+ startnum i))
+                   )
+      )
+      (setq newname (strcat prefix padnum))
+    )
+
+    ;; copy layout
+    (command "-LAYOUT" "_Copy" oldlay newname)
+
+    ;; chuyển sang layout mới
+    (setvar 'CTAB newname)
+
+    ;; shift viewport
+    (shift-viewport-scale dir)
+
+    (princ (strcat "\n✓ Created & Shifted: " newname))
+
+    ;; update layout gốc
+    (setq oldlay newname)
+
+    (setq i (1+ i))
+  )
+
+  (alert (strcat "Hoàn tất!\nĐã tạo " (itoa qty) " layout."))
+  (princ)
+)
+
+(princ "\nCLAYPSV (Direction version) loaded. Gõ CLAYPSV để chạy.\n")
